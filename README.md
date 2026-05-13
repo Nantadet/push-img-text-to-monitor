@@ -92,6 +92,91 @@ Guest สามารถส่งรูปภาพและข้อควา�
 
 ---
 
+# 2. Image Storage System
+
+ระบบจัดเก็บรูปภาพของ Guest ลงในเซิร์ฟเวอร์
+
+## Flow
+
+```txt
+Guest Upload Image
+        ↓
+Backend Receive File
+        ↓
+Check img Folder
+        ↓
+If Not Exists → Create Folder
+        ↓
+Generate ID
+        ↓
+Save Image
+        ↓
+Save Path To Database
+        ↓
+Frontend Load Image By Path
+```
+
+---
+
+## Image Folder Structure
+
+```txt
+backend/
+ ├─ img/
+ │   ├─ 68231abc.png
+ │   ├─ 68231def.jpg
+ │
+ └─ main.go
+```
+
+---
+
+## Image Path Mapping
+
+เมื่อ Guest ส่งรูปเข้ามา ระบบจะ:
+
+1. Generate Object ID
+2. ตั้งชื่อไฟล์ตาม ID
+3. Save รูปลงโฟลเดอร์ `img`
+4. Save Path ลง MongoDB
+
+ตัวอย่างข้อมูลใน Database
+
+```json
+{
+  "_id": "68231abc",
+  "message": "hello",
+  "imagePath": "img/68231abc.png"
+}
+```
+
+---
+
+## Frontend Rendering
+
+Frontend จะดึงข้อมูลจาก Database แล้ว map path รูปโดยตรง
+
+ตัวอย่าง
+
+```tsx
+<img src={`http://localhost:3000/${item.imagePath}`} />
+```
+
+---
+
+## Backend Requirements
+
+### สิ่งที่ต้องทำ
+
+* [ ] เช็คโฟลเดอร์ img
+* [ ] ถ้าไม่มีให้สร้างใหม่อัตโนมัติ
+* [ ] Save รูปลง img
+* [ ] Generate File Name ด้วย ID
+* [ ] Save imagePath ลง Database
+* [ ] เปิด Static Route สำหรับรูป
+
+---
+
 # 2. Guest Upload System
 
 ระบบส่งข้อความและรูปภาพ
