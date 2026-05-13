@@ -1,0 +1,10 @@
+{
+  "name": "day-3",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n BN,FN -c blue,green \"cd backend && go run .\" \"cd frontend && pnpm dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
