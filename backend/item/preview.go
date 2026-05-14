@@ -232,11 +232,21 @@ func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*Prev
 		thumbnail = c.tiktokOEmbedThumbnail(ctx, rawURL)
 	}
 
+	// Build embed URL for TikTok
+	embedURL := ""
+	if u, err := neturl.Parse(rawURL); err == nil {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) >= 3 {
+			embedURL = fmt.Sprintf("https://www.tiktok.com/embed/v2/%s?autoplay=1", parts[len(parts)-1])
+		}
+	}
+
 	return &PreviewResponse{
 		IGURL:      rawURL,
 		IGImageURL: thumbnail,
 		IGUsername: username,
 		VideoURL:   videoURL,
+		EmbedURL:   embedURL,
 	}, nil
 }
 
@@ -283,6 +293,7 @@ func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*Pre
 			IGURL:      rawURL,
 			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
 			AudioURL:   entry.url,
+			EmbedURL:   fmt.Sprintf("https://www.youtube.com/embed/%s?autoplay=1&mute=1&rel=0", videoID),
 		}, nil
 	}
 
@@ -297,11 +308,13 @@ func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*Pre
 		rawURL,
 	)
 	out, err := cmd.Output()
+	embedURL := fmt.Sprintf("https://www.youtube.com/embed/%s?autoplay=1&mute=1&rel=0", videoID)
 	if err != nil {
 		// Fallback to thumbnail-only preview
 		return &PreviewResponse{
 			IGURL:      rawURL,
 			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+			EmbedURL:   embedURL,
 		}, nil
 	}
 
@@ -310,6 +323,7 @@ func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*Pre
 		return &PreviewResponse{
 			IGURL:      rawURL,
 			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+			EmbedURL:   embedURL,
 		}, nil
 	}
 
@@ -325,6 +339,7 @@ func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*Pre
 		IGURL:      rawURL,
 		IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
 		AudioURL:   audioURL,
+		EmbedURL:   fmt.Sprintf("https://www.youtube.com/embed/%s?autoplay=1&mute=1&rel=0", videoID),
 	}, nil
 }
 
@@ -664,9 +679,18 @@ func previewFromMediaEndpoint(target instagramTarget) (*PreviewResponse, error) 
 	if target.kind != instagramKindMedia {
 		return nil, errInvalidInstagramURL
 	}
+	embedURL := ""
+	u, _ := neturl.Parse(target.url)
+	if u != nil {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) >= 2 {
+			embedURL = fmt.Sprintf("https://www.instagram.com/%s/%s/embed/", parts[0], parts[1])
+		}
+	}
 	return &PreviewResponse{
 		IGURL:      target.url,
 		IGImageURL: strings.TrimRight(target.url, "/") + "/media/?size=l",
+		EmbedURL:   embedURL,
 	}, nil
 }
 
@@ -752,12 +776,35 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 		image := extractBestImageFromHTML(htmlStr)
 		video := extractVideoFromHTML(htmlStr)
 		if image != "" || video != "" {
+			embedURL := ""
+			if target, ok := parseInstagramURL(igURL); ok && target.kind == instagramKindMedia {
+				u, _ := neturl.Parse(igURL)
+				if u != nil {
+					parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+					if len(parts) >= 2 {
+						embedURL = fmt.Sprintf("https://www.instagram.com/%s/%s/embed/", parts[0], parts[1])
+					}
+				}
+			}
 			return &PreviewResponse{
 				IGURL:      igURL,
 				IGImageURL: image,
 				IGUsername: username,
 				VideoURL:   video,
+				EmbedURL:   embedURL,
 			}, nil
+		}
+	}
+
+	// Pre-build embed URL for posts/reels to include in fallbacks
+	embedURL := ""
+	if target.kind == instagramKindMedia {
+		u, _ := neturl.Parse(igURL)
+		if u != nil {
+			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			if len(parts) >= 2 {
+				embedURL = fmt.Sprintf("https://www.instagram.com/%s/%s/embed/", parts[0], parts[1])
+			}
 		}
 	}
 
@@ -768,6 +815,7 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 			IGURL:      igURL,
 			IGImageURL: meta.image,
 			IGUsername: meta.username,
+			EmbedURL:   embedURL,
 		}, nil
 	}
 

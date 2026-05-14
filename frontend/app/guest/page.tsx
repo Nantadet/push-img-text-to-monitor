@@ -232,7 +232,21 @@ export default function GuestPage() {
         <aside className="panel flex flex-col rounded-[28px] p-6 md:p-8">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">preview</p>
           <div className="mt-5 flex-1 overflow-hidden rounded-[24px] border border-[var(--line)] bg-white">
-            {hasVideoPreview ? (
+            {linkPreview?.embedUrl ? (
+              <>
+                <iframe
+                  src={linkPreview.embedUrl}
+                  className="h-[360px] w-full"
+                  allow="autoplay; encrypted-media"
+                  sandbox="allow-scripts allow-same-origin allow-presentation"
+                />
+                <PreviewMessage
+                  title={linkPreview?.igUsername || platformLabel(platform)}
+                  message={trimmedMessage}
+                  igUrl={linkPreview?.igUrl}
+                />
+              </>
+            ) : hasVideoPreview ? (
               <>
                 <video
                   src={linkPreview?.videoUrl}

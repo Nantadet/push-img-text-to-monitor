@@ -9,6 +9,7 @@ export type DisplayItem = {
   igUsername: string
   videoUrl: string
   audioUrl: string
+  embedUrl: string
   message: string
   status: 'queued' | 'displaying' | 'skipped' | 'displayed'
   displayMinutes: number
@@ -23,6 +24,7 @@ export type PreviewItem = {
   igUsername: string
   videoUrl: string
   audioUrl: string
+  embedUrl: string
 }
 
 export type CreateDisplayItemInput =

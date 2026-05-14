@@ -27,6 +27,7 @@ type Item struct {
 	IGUsername           string        `bson:"igUsername"`
 	VideoURL             string        `bson:"videoUrl"`
 	AudioURL             string        `bson:"audioUrl"`
+	EmbedURL             string        `bson:"embedUrl"`
 	Message              string        `bson:"message"`
 	Status               string        `bson:"status"`
 	DisplayMinutes       int           `bson:"displayMinutes,omitempty"`
@@ -44,6 +45,7 @@ type ItemResponse struct {
 	IGUsername     string     `json:"igUsername"`
 	VideoURL       string     `json:"videoUrl"`
 	AudioURL       string     `json:"audioUrl"`
+	EmbedURL       string     `json:"embedUrl"`
 	Message        string     `json:"message"`
 	Status         string     `json:"status"`
 	DisplayMinutes int        `json:"displayMinutes"`
@@ -101,6 +103,7 @@ func toResponse(it *Item) *ItemResponse {
 		IGUsername:     it.IGUsername,
 		VideoURL:       it.VideoURL,
 		AudioURL:       it.AudioURL,
+		EmbedURL:       it.EmbedURL,
 		Message:        it.Message,
 		Status:         it.Status,
 		DisplayMinutes: it.displayMinutesValue(),

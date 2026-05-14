@@ -31,4 +31,5 @@ type PreviewResponse struct {
 	IGUsername string `json:"igUsername"`
 	VideoURL   string `json:"videoUrl"`
 	AudioURL   string `json:"audioUrl"`
+	EmbedURL   string `json:"embedUrl"`
 }

@@ -63,6 +63,7 @@ func (s *Service) Create(ctx context.Context, dto CreateItemDTO) (*ItemResponse,
 		it.IGUsername = preview.IGUsername
 		it.VideoURL = preview.VideoURL
 		it.AudioURL = preview.AudioURL
+		it.EmbedURL = preview.EmbedURL
 	case SourceImage:
 		it.IGImageURL = strings.TrimSpace(dto.IGImageURL)
 		it.IGUsername = strings.TrimSpace(dto.IGUsername)
