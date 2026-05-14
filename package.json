@@ -2,7 +2,9 @@
   "name": "day-3",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n BN,FN -c blue,green \"cd backend && go run .\" \"cd frontend && pnpm dev\""
+    "sync": "concurrently -n BN,FN -c blue,green \"cd backend && go mod tidy\" \"cd frontend && pnpm install\"",
+    "build": "concurrently -n BN,FN -c blue,green \"scripts\\\\build-backend.cmd\" \"cd frontend && pnpm build\"",
+    "dev": "concurrently -n BN,FN -c blue,green \"scripts\\\\dev-backend.cmd\" \"cd frontend && pnpm dev\""
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

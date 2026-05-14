@@ -8,13 +8,15 @@ import (
 	"github.com/HLLC-MFU/hllc-workshop-backend/auth"
 	"github.com/HLLC-MFU/hllc-workshop-backend/course"
 	"github.com/HLLC-MFU/hllc-workshop-backend/database"
+	"github.com/HLLC-MFU/hllc-workshop-backend/item"
 	"github.com/HLLC-MFU/hllc-workshop-backend/major"
 	"github.com/HLLC-MFU/hllc-workshop-backend/push"
 	"github.com/HLLC-MFU/hllc-workshop-backend/ws"
-	"github.com/gofiber/contrib/websocket"
+	fws "github.com/fasthttp/websocket"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/joho/godotenv"
+	"github.com/valyala/fasthttp"
 )
 
 func main() {
@@ -25,7 +27,9 @@ func main() {
 		log.Fatal("mongo connect:", err)
 	}
 
-	app := fiber.New()
+	app := fiber.New(fiber.Config{
+		BodyLimit: 10 * 1024 * 1024,
+	})
 
 	// CORS — เปิดให้ FE ที่ port 3001 เรียกได้
 	allowed := os.Getenv("ALLOWED_ORIGIN")
@@ -59,6 +63,11 @@ func main() {
 	authH := auth.NewHandler(authSvc)
 	authH.RegisterRoutes(app)
 
+	itemRepo := item.NewRepository(db.Collection("display_items"))
+	itemSvc := item.NewService(itemRepo)
+	itemH := item.NewHandler(itemSvc)
+	itemH.RegisterRoutes(app)
+
 	pushRrpo := push.NewRepository(db.Collection("pushes"))
 	pushSvc := push.NewService(pushRrpo)
 	pushH := push.NewHandler(pushSvc)
@@ -70,27 +79,36 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	app.Get("/ws", websocket.New(func(c *websocket.Conn) {
+	upgrader := fws.FastHTTPUpgrader{
+		CheckOrigin: func(ctx *fasthttp.RequestCtx) bool {
+			return true
+		},
+	}
+	app.Get("/ws", func(c fiber.Ctx) error {
+		if !c.IsWebSocket() {
+			return fiber.ErrUpgradeRequired
+		}
 
-		ws.Mutex.Lock()
-		ws.Clients[c] = true
-		ws.Mutex.Unlock()
-
-		defer func() {
+		return upgrader.Upgrade(c.RequestCtx(), func(conn *fws.Conn) {
 			ws.Mutex.Lock()
-			delete(ws.Clients, c)
+			ws.Clients[conn] = true
 			ws.Mutex.Unlock()
 
-			c.Close()
-		}()
+			defer func() {
+				ws.Mutex.Lock()
+				delete(ws.Clients, conn)
+				ws.Mutex.Unlock()
 
-		for {
-			// รอ connection
-			if _, _, err := c.ReadMessage(); err != nil {
-				break
+				conn.Close()
+			}()
+
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					break
+				}
 			}
-		}
-	}))
+		})
+	})
 	log.Println("listening on :" + port)
 	log.Fatal(app.Listen(":" + port))
 }

@@ -2,4 +2,54 @@
 @tailwind components;
 @tailwind utilities;
 
-body { background: #ffffff; }
+:root {
+  --bg: #f6f1e8;
+  --panel: rgba(255, 252, 246, 0.84);
+  --panel-strong: #fffaf2;
+  --ink: #231910;
+  --muted: #6d6054;
+  --line: rgba(35, 25, 16, 0.12);
+  --accent: #ea5b2a;
+  --accent-soft: #ffd7c8;
+  --accent-deep: #a53d1d;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(234, 91, 42, 0.16), transparent 28rem),
+    radial-gradient(circle at top right, rgba(38, 94, 76, 0.14), transparent 24rem),
+    linear-gradient(180deg, #fff8ef 0%, var(--bg) 100%);
+  color: var(--ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading), sans-serif;
+  letter-spacing: 0;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono), monospace;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 50px rgba(35, 25, 16, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.grid-glow {
+  background-image:
+    linear-gradient(rgba(35, 25, 16, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(35, 25, 16, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
