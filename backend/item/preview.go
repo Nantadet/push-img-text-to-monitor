@@ -518,6 +518,25 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 		return nil, fmt.Errorf("%w: open_graph read body failed", errPreviewFetchFailed)
 	}
 
+	htmlStr := string(body)
+	username := ""
+	if u, err := neturl.Parse(igURL); err == nil {
+		_, _, username, _ = normalizeInstagramPath(u.Path)
+	}
+
+	// For posts/reels, try the embedded image_versions2 first — it usually has the uncropped original
+	target, _ := parseInstagramURL(igURL)
+	if target.kind == instagramKindMedia {
+		image := extractImageVersionsFromHTML(htmlStr)
+		if image != "" {
+			return &PreviewResponse{
+				IGURL:      igURL,
+				IGImageURL: image,
+				IGUsername: username,
+			}, nil
+		}
+	}
+
 	// Try 1: Standard OpenGraph meta tags
 	meta, err := extractPreviewMetaFromBytes(body)
 	if err == nil && meta.image != "" {
@@ -528,11 +547,19 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 		}, nil
 	}
 
-	// Try 2: Extract from embedded JSON in HTML (Instagram still embeds profile data in script tags)
-	username := ""
-	if u, err := neturl.Parse(igURL); err == nil {
-		_, _, username, _ = normalizeInstagramPath(u.Path)
+	// For profiles, try image_versions2 as fallback (some profile pages embed it too)
+	if target.kind == instagramKindProfile {
+		image := extractImageVersionsFromHTML(htmlStr)
+		if image != "" {
+			return &PreviewResponse{
+				IGURL:      igURL,
+				IGImageURL: image,
+				IGUsername: username,
+			}, nil
+		}
 	}
+
+	// Try 3: Extract from embedded JSON in HTML (Instagram still embeds profile data in script tags)
 	image, jsonUsername := extractProfileFromEmbeddedJSON(body)
 	if image != "" {
 		if jsonUsername != "" {
@@ -707,6 +734,17 @@ func extractPreviewMetaFromBytes(body []byte) (*previewMeta, error) {
 
 	walk(doc)
 
+	// Fallback: use regex for minified HTML where the parser sometimes misses meta tags
+	if image == "" {
+		image = extractMetaByRegex(string(body), "og:image")
+	}
+	if title == "" {
+		title = extractMetaByRegex(string(body), "og:title")
+	}
+
+	// Decode HTML entities in image URL (Instagram sometimes encodes & as &amp;)
+	image = strings.ReplaceAll(image, "&amp;", "&")
+
 	username := ""
 	if match := usernameFromTitleRe.FindStringSubmatch(title); len(match) == 2 {
 		username = strings.TrimSpace(match[1])
@@ -716,6 +754,26 @@ func extractPreviewMetaFromBytes(body []byte) (*previewMeta, error) {
 		image:    image,
 		username: username,
 	}, nil
+}
+
+var metaRegexCache = map[string]*regexp.Regexp{}
+
+func extractMetaByRegex(html, property string) string {
+	re, ok := metaRegexCache[property]
+	if !ok {
+		// Matches both orderings: property="..." content="..." and content="..." property="..."
+		pattern := fmt.Sprintf(`<meta[^>]*(?:property=["']%s["'][^>]*content=["']([^"']+)["']|content=["']([^"']+)["'][^>]*property=["']%s["'])`, regexp.QuoteMeta(property), regexp.QuoteMeta(property))
+		re = regexp.MustCompile(pattern)
+		metaRegexCache[property] = re
+	}
+	matches := re.FindStringSubmatch(html)
+	if len(matches) >= 3 {
+		if matches[1] != "" {
+			return matches[1]
+		}
+		return matches[2]
+	}
+	return ""
 }
 
 // extractProfileFromEmbeddedJSON searches for Instagram's embedded JSON data in HTML script tags.
@@ -786,6 +844,55 @@ func findProfilePicInAnyJSON(value any) (image string, username string) {
 		}
 	}
 	return "", ""
+}
+
+// extractImageVersionsFromHTML extracts the highest-quality image URL from Instagram's embedded
+// image_versions2 JSON inside the HTML. This works for posts/reels and usually returns an uncropped
+// original image (e.g. 1440x1800) instead of the square-cropped og:image thumbnail.
+func extractImageVersionsFromHTML(html string) string {
+	idx := strings.Index(html, `"image_versions2":`)
+	if idx < 0 {
+		return ""
+	}
+
+	start := idx + len(`"image_versions2":`)
+	depth := 0
+	end := start
+	for i := start; i < len(html); i++ {
+		if html[i] == '{' {
+			depth++
+		} else if html[i] == '}' {
+			depth--
+			if depth == 0 {
+				end = i + 1
+				break
+			}
+		}
+	}
+	if end <= start {
+		return ""
+	}
+
+	jsonStr := html[start:end]
+	// Fix common JSON escape sequences found in Instagram's inline JSON
+	jsonStr = strings.ReplaceAll(jsonStr, `\\u0025`, "%")
+	jsonStr = strings.ReplaceAll(jsonStr, `\\u0026`, "&")
+	jsonStr = strings.ReplaceAll(jsonStr, `\\u002F`, "/")
+	jsonStr = strings.ReplaceAll(jsonStr, `\\/`, "/")
+	jsonStr = strings.ReplaceAll(jsonStr, `&amp;`, "&")
+
+	var payload struct {
+		Candidates []struct {
+			URL string `json:"url"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+		return ""
+	}
+	if len(payload.Candidates) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(payload.Candidates[0].URL)
 }
 
 // extractProfilePicFromHTML searches the raw HTML for profile_pic_url using regex as a last resort.

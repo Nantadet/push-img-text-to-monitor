@@ -66,7 +66,7 @@ export default function DisplayPage() {
             <img
               src={current.igImageUrl}
               alt={current.message}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-contain bg-black"
             />
           ) : (
             <div className="grid h-full w-full place-items-center bg-gradient-to-br from-stone-800 to-stone-900">
