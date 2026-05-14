@@ -1,8 +1,6 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useRef } from 'react'
-import { formatClock } from '@/lib/display'
 import {
   useCurrentDisplay,
   useDisplayCountdown,
@@ -36,95 +34,61 @@ export default function DisplayPage() {
     finishMutation.mutate()
   }, [current, finishMutation, remaining])
 
+  if (!current) {
+    return (
+      <main className="grid h-screen w-screen place-items-center bg-black">
+        <div className="text-center text-white">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/60">display idle</p>
+          <h1 className="mt-4 text-4xl md:text-6xl">Waiting for content...</h1>
+        </div>
+      </main>
+    )
+  }
+
   return (
-    <main className="min-h-screen px-4 py-4 md:px-6">
-      <div className="panel grid min-h-[calc(100vh-2rem)] overflow-hidden rounded-[32px] lg:grid-cols-[1.35fr_0.65fr]">
-        {current ? (
-          <>
-            <div className="relative min-h-[420px] overflow-hidden">
-              {current.igImageUrl ? (
-                <>
-                  <img
-                    src={current.igImageUrl}
-                    alt={current.message}
-                    className="h-full min-h-[420px] w-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/5 to-transparent" />
-                  <div className="absolute bottom-0 left-0 right-0 p-6 text-white md:p-8">
-                    <p className="font-mono text-xs uppercase tracking-[0.2em] text-white/75">now showing</p>
-                    <h1 className="mt-3 max-w-3xl text-3xl leading-tight md:text-5xl">{current.message}</h1>
-                  </div>
-                </>
-              ) : (
-                <div className="grid min-h-[420px] place-items-center bg-[var(--panel-strong)] p-8 text-center">
-                  <div className="max-w-3xl">
-                    <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--accent-deep)]">
-                      now showing
-                    </p>
-                    <h1 className="mt-5 text-4xl leading-tight md:text-6xl">{current.message}</h1>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col justify-between gap-8 p-6 md:p-8">
-              <div>
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">display control</p>
-                <div className="mt-5 rounded-[28px] bg-[var(--accent-soft)] px-6 py-5 text-[var(--accent-deep)]">
-                  <p className="font-mono text-sm uppercase tracking-[0.18em]">time left</p>
-                  <p className="mt-2 text-6xl leading-none">{formatClock(remaining)}</p>
-                  <p className="mt-3 text-sm">Duration: {current.displayMinutes} minute(s)</p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="rounded-[24px] border border-[var(--line)] bg-white/75 p-5">
-                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">source</p>
-                  {current.igUrl ? (
-                    <a
-                      href={current.igUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-3 block text-lg text-stone-900 underline decoration-[var(--accent)] underline-offset-4"
-                    >
-                      {current.igUsername || current.igUrl}
-                    </a>
-                  ) : (
-                    <p className="mt-3 text-lg capitalize text-stone-900">{current.sourceType}</p>
-                  )}
-                </div>
-
-                <div className="rounded-[24px] border border-[var(--line)] bg-white/75 p-5">
-                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">sync</p>
-                  <p className="mt-3 text-sm leading-6 text-stone-700">
-                    This page counts down locally from displayedAt plus displayMinutes. When time reaches zero, it asks
-                    backend to mark the item as displayed and promote the oldest queued item.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <Link href="/admin" className="rounded-full border border-[var(--line)] px-4 py-2 text-sm">
-                  Open Admin
-                </Link>
-                <Link href="/guest" className="rounded-full border border-[var(--line)] px-4 py-2 text-sm">
-                  Open Guest
-                </Link>
-              </div>
-            </div>
-          </>
+    <main className="flex h-screen w-screen flex-col overflow-hidden bg-black">
+      {/* Image area — centered, contained, never breaks aspect ratio */}
+      <div className="flex flex-1 items-center justify-center overflow-hidden px-4 pt-4 md:px-8 md:pt-8">
+        {current.igImageUrl ? (
+          <img
+            src={current.igImageUrl}
+            alt={current.message}
+            className="max-h-full max-w-full rounded-2xl object-contain shadow-2xl"
+          />
         ) : (
-          <div className="grid min-h-[calc(100vh-2rem)] place-items-center p-6">
-            <div className="max-w-xl text-center">
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--muted)]">display idle</p>
-              <h1 className="mt-4 text-5xl">Waiting for the next queued item</h1>
-              <p className="mt-4 text-sm leading-7 text-[var(--muted)]">
-                When backend has no active item, the next queued item with the oldest createdAt will be promoted as
-                soon as one is available.
-              </p>
-            </div>
+          <div className="grid h-full w-full place-items-center">
+            <h1 className="max-w-4xl px-8 text-center text-4xl leading-tight text-white md:text-6xl">
+              {current.message}
+            </h1>
           </div>
         )}
+      </div>
+
+      {/* Bottom info bar */}
+      <div className="shrink-0 px-6 pb-6 pt-4 text-center text-white md:px-10 md:pb-8 md:pt-6">
+        <div className="mx-auto flex max-w-4xl flex-col items-center gap-3">
+          {/* Instagram handle */}
+          {current.igUsername && (
+            <p className="text-lg font-semibold tracking-wide text-white/90 md:text-xl">
+              @{current.igUsername}
+            </p>
+          )}
+
+          {/* Message */}
+          {current.message && (
+            <h2 className="max-w-2xl text-xl leading-snug text-white/80 md:text-2xl">
+              {current.message}
+            </h2>
+          )}
+
+          {/* QR placeholder — user will customize */}
+          <div className="mt-2 flex flex-col items-center gap-2">
+            <div className="flex h-24 w-24 items-center justify-center rounded-xl bg-white/10 backdrop-blur-sm md:h-28 md:w-28">
+              <span className="text-xs text-white/40">QR</span>
+            </div>
+            <span className="text-xs text-white/50">Scan to submit</span>
+          </div>
+        </div>
       </div>
     </main>
   )

@@ -120,7 +120,7 @@ export default function GuestPage() {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form id="guest-form" onSubmit={handleSubmit} className="space-y-5">
             <div>
               <span className="mb-2 block text-sm font-medium text-stone-800">Submit Type</span>
               <div className="flex flex-wrap gap-2 rounded-2xl border border-[var(--line)] bg-white/65 p-1">
@@ -190,13 +190,6 @@ export default function GuestPage() {
                   {previewMutation.isPending ? 'Loading preview...' : 'Load Preview'}
                 </button>
               ) : null}
-              <button
-                type="submit"
-                disabled={createMutation.isPending || !canSubmit}
-                className="rounded-full bg-[var(--accent)] px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {createMutation.isPending ? 'Sending to queue...' : 'Send To Queue'}
-              </button>
             </div>
 
             {previewMutation.error ? <p className="text-sm text-rose-700">{previewMutation.error.message}</p> : null}
@@ -207,9 +200,9 @@ export default function GuestPage() {
           </form>
         </section>
 
-        <aside className="panel rounded-[28px] p-6 md:p-8">
+        <aside className="panel flex flex-col rounded-[28px] p-6 md:p-8">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">preview</p>
-          <div className="mt-5 overflow-hidden rounded-[24px] border border-[var(--line)] bg-white">
+          <div className="mt-5 flex-1 overflow-hidden rounded-[24px] border border-[var(--line)] bg-white">
             {previewImageURL ? (
               <>
                 <img
@@ -254,6 +247,16 @@ export default function GuestPage() {
               </div>
             )}
           </div>
+
+          {/* Submit button moved below preview */}
+          <button
+            form="guest-form"
+            type="submit"
+            disabled={createMutation.isPending || !canSubmit}
+            className="mt-5 ml-auto block rounded-full bg-[var(--accent)] px-6 py-3 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {createMutation.isPending ? 'Sending to queue...' : 'Send To Queue'}
+          </button>
         </aside>
       </div>
     </main>

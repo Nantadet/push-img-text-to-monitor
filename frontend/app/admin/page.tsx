@@ -8,7 +8,6 @@ import {
   useAddTimeToCurrentDisplayItem,
   useAdminItems,
   useAdminLogin,
-  useAdminRegister,
   useCurrentDisplay,
   useDeleteDisplayItem,
   useDisplayCountdown,
@@ -21,12 +20,9 @@ import {
 
 const SESSION_KEY = 'live-display-admin'
 
-type AuthMode = 'login' | 'register'
-
 export default function AdminPage() {
   const [mounted, setMounted] = useState(false)
   const [session, setSession] = useState<string | null>(null)
-  const [mode, setMode] = useState<AuthMode>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
@@ -40,10 +36,8 @@ export default function AdminPage() {
   if (!session) {
     return (
       <AdminAuth
-        mode={mode}
         username={username}
         password={password}
-        onModeChange={setMode}
         onUsernameChange={setUsername}
         onPasswordChange={setPassword}
         onSuccess={(nextUsername) => {
@@ -66,17 +60,13 @@ export default function AdminPage() {
 }
 
 function AdminAuth(props: {
-  mode: AuthMode
   username: string
   password: string
-  onModeChange: (value: AuthMode) => void
   onUsernameChange: (value: string) => void
   onPasswordChange: (value: string) => void
   onSuccess: (username: string) => void
 }) {
   const loginMutation = useAdminLogin()
-  const registerMutation = useAdminRegister()
-  const activeMutation = props.mode === 'login' ? loginMutation : registerMutation
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -86,11 +76,7 @@ function AdminAuth(props: {
       password: props.password,
     }
 
-    const user =
-      props.mode === 'login'
-        ? await loginMutation.mutateAsync(payload)
-        : await registerMutation.mutateAsync(payload)
-
+    const user = await loginMutation.mutateAsync(payload)
     props.onSuccess(user.username)
   }
 
@@ -103,33 +89,14 @@ function AdminAuth(props: {
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--accent-deep)]">
                 admin access
               </p>
-              <h1 className="mt-3 text-4xl md:text-5xl">
-                {props.mode === 'login' ? 'Login to dashboard' : 'Create admin account'}
-              </h1>
+              <h1 className="mt-3 text-4xl md:text-5xl">Login to dashboard</h1>
               <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                Register once if the database has no admin yet. After that, log in and control the live queue.
+                Admin accounts can only be created via API. If you do not have an account yet, ask the system owner to register one for you.
               </p>
             </div>
             <Link href="/" className="font-mono text-sm text-[var(--muted)] underline-offset-4 hover:underline">
               home
             </Link>
-          </div>
-
-          <div className="mb-6 inline-flex rounded-full border border-[var(--line)] bg-white/70 p-1 text-sm">
-            <button
-              type="button"
-              onClick={() => props.onModeChange('login')}
-              className={`rounded-full px-4 py-2 ${props.mode === 'login' ? 'bg-stone-900 text-white' : 'text-stone-700'}`}
-            >
-              Login
-            </button>
-            <button
-              type="button"
-              onClick={() => props.onModeChange('register')}
-              className={`rounded-full px-4 py-2 ${props.mode === 'register' ? 'bg-stone-900 text-white' : 'text-stone-700'}`}
-            >
-              Register
-            </button>
           </div>
 
           <form onSubmit={handleSubmit} className="grid gap-4">
@@ -148,21 +115,15 @@ function AdminAuth(props: {
             />
             <button
               type="submit"
-              disabled={activeMutation.isPending}
+              disabled={loginMutation.isPending}
               className="rounded-full bg-stone-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
             >
-              {activeMutation.isPending
-                ? props.mode === 'login'
-                  ? 'Signing in...'
-                  : 'Creating account...'
-                : props.mode === 'login'
-                  ? 'Login'
-                  : 'Register'}
+              {loginMutation.isPending ? 'Signing in...' : 'Login'}
             </button>
           </form>
 
-          {activeMutation.error ? (
-            <p className="mt-4 text-sm text-rose-700">{activeMutation.error.message}</p>
+          {loginMutation.error ? (
+            <p className="mt-4 text-sm text-rose-700">{loginMutation.error.message}</p>
           ) : null}
         </div>
       </div>

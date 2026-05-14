@@ -162,3 +162,50 @@ func TestIsAllowedInstagramImageURL(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractPreviewMetaFromBytes(t *testing.T) {
+	html := []byte(`<html><head>
+		<meta property="og:image" content="https://cdn.example/image.jpg">
+		<meta property="og:title" content="demo_user on Instagram: test post">
+	</head></html>`)
+
+	meta, err := extractPreviewMetaFromBytes(html)
+	if err != nil {
+		t.Fatalf("extractPreviewMetaFromBytes returned error: %v", err)
+	}
+	if meta.image != "https://cdn.example/image.jpg" {
+		t.Fatalf("image = %q", meta.image)
+	}
+	if meta.username != "demo_user" {
+		t.Fatalf("username = %q", meta.username)
+	}
+}
+
+func TestExtractProfileFromEmbeddedJSON(t *testing.T) {
+	html := []byte(`<html><head><script type="application/json">
+		{"data":{"user":{"username":"testuser","profile_pic_url_hd":"https://cdn.example/hd.jpg"}}}
+	</script></head></html>`)
+
+	image, username := extractProfileFromEmbeddedJSON(html)
+	if image != "https://cdn.example/hd.jpg" {
+		t.Fatalf("image = %q", image)
+	}
+	if username != "testuser" {
+		t.Fatalf("username = %q", username)
+	}
+}
+
+func TestExtractProfilePicFromHTML(t *testing.T) {
+	html := `<html><body>"profile_pic_url_hd":"https://cdn.example/hd.jpg"</body></html>`
+
+	image := extractProfilePicFromHTML(html)
+	if image != "https://cdn.example/hd.jpg" {
+		t.Fatalf("image = %q", image)
+	}
+
+	htmlNoHD := `<html><body>"profile_pic_url":"https://cdn.example/normal.jpg"</body></html>`
+	image = extractProfilePicFromHTML(htmlNoHD)
+	if image != "https://cdn.example/normal.jpg" {
+		t.Fatalf("image = %q", image)
+	}
+}

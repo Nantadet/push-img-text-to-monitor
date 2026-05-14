@@ -1,10 +1,12 @@
 package item
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	neturl "net/url"
@@ -499,9 +501,7 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	setInstagramNavigationHeaders(req)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -513,19 +513,49 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 		return nil, fmt.Errorf("%w: open_graph returned %d", errPreviewFetchFailed, res.StatusCode)
 	}
 
-	meta, err := extractPreviewMeta(res)
+	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: open_graph html parse failed", errPreviewFetchFailed)
-	}
-	if meta.image == "" {
-		return nil, fmt.Errorf("%w: open_graph returned no image", errPreviewFetchFailed)
+		return nil, fmt.Errorf("%w: open_graph read body failed", errPreviewFetchFailed)
 	}
 
-	return &PreviewResponse{
-		IGURL:      igURL,
-		IGImageURL: meta.image,
-		IGUsername: meta.username,
-	}, nil
+	// Try 1: Standard OpenGraph meta tags
+	meta, err := extractPreviewMetaFromBytes(body)
+	if err == nil && meta.image != "" {
+		return &PreviewResponse{
+			IGURL:      igURL,
+			IGImageURL: meta.image,
+			IGUsername: meta.username,
+		}, nil
+	}
+
+	// Try 2: Extract from embedded JSON in HTML (Instagram still embeds profile data in script tags)
+	username := ""
+	if u, err := neturl.Parse(igURL); err == nil {
+		_, _, username, _ = normalizeInstagramPath(u.Path)
+	}
+	image, jsonUsername := extractProfileFromEmbeddedJSON(body)
+	if image != "" {
+		if jsonUsername != "" {
+			username = jsonUsername
+		}
+		return &PreviewResponse{
+			IGURL:      igURL,
+			IGImageURL: image,
+			IGUsername: username,
+		}, nil
+	}
+
+	// Try 3: Direct regex search for profile_pic_url in HTML
+	image = extractProfilePicFromHTML(string(body))
+	if image != "" {
+		return &PreviewResponse{
+			IGURL:      igURL,
+			IGImageURL: image,
+			IGUsername: username,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("%w: open_graph returned no image", errPreviewFetchFailed)
 }
 
 func isInstagramURL(raw string) bool {
@@ -628,7 +658,15 @@ type previewMeta struct {
 }
 
 func extractPreviewMeta(res *http.Response) (*previewMeta, error) {
-	doc, err := html.Parse(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	return extractPreviewMetaFromBytes(body)
+}
+
+func extractPreviewMetaFromBytes(body []byte) (*previewMeta, error) {
+	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -678,4 +716,91 @@ func extractPreviewMeta(res *http.Response) (*previewMeta, error) {
 		image:    image,
 		username: username,
 	}, nil
+}
+
+// extractProfileFromEmbeddedJSON searches for Instagram's embedded JSON data in HTML script tags.
+// Instagram embeds user profile data in <script type="application/json"> tags.
+func extractProfileFromEmbeddedJSON(body []byte) (image string, username string) {
+	// Try to find any <script> tags with JSON content and search for profile_pic_url
+	scriptRe := regexp.MustCompile(`<script[^>]*>([\s\S]*?)</script>`)
+	matches := scriptRe.FindAllSubmatch(body, -1)
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		scriptContent := match[1]
+
+		// Skip non-JSON scripts quickly
+		if !bytes.Contains(scriptContent, []byte("profile_pic_url")) {
+			continue
+		}
+
+		var payload any
+		if err := json.Unmarshal(scriptContent, &payload); err != nil {
+			// Try to find JSON in window._sharedData format
+			continue
+		}
+
+		// Use recursive search to find profile picture and username
+		img, uname := findProfilePicInAnyJSON(payload)
+		if img != "" {
+			return img, uname
+		}
+	}
+
+	return "", ""
+}
+
+func findProfilePicInAnyJSON(value any) (image string, username string) {
+	switch current := value.(type) {
+	case map[string]any:
+		// Check for profile picture and username at this level
+		if img, ok := current["profile_pic_url_hd"].(string); ok && img != "" {
+			if uname, ok := current["username"].(string); ok {
+				return img, uname
+			}
+			return img, ""
+		}
+		if img, ok := current["profile_pic_url"].(string); ok && img != "" {
+			if uname, ok := current["username"].(string); ok {
+				return img, uname
+			}
+			return img, ""
+		}
+		if img, ok := current["profile_pic_url"].(string); ok && img != "" {
+			return img, ""
+		}
+
+		// Recurse into child values
+		for _, child := range current {
+			if img, uname := findProfilePicInAnyJSON(child); img != "" {
+				return img, uname
+			}
+		}
+	case []any:
+		for _, child := range current {
+			if img, uname := findProfilePicInAnyJSON(child); img != "" {
+				return img, uname
+			}
+		}
+	}
+	return "", ""
+}
+
+// extractProfilePicFromHTML searches the raw HTML for profile_pic_url using regex as a last resort.
+func extractProfilePicFromHTML(html string) string {
+	// Look for profile_pic_url_hd first (higher quality)
+	hdRe := regexp.MustCompile(`"profile_pic_url_hd"\s*:\s*"([^"]+)"`)
+	if match := hdRe.FindStringSubmatch(html); len(match) > 1 {
+		return match[1]
+	}
+
+	// Fallback to profile_pic_url
+	picRe := regexp.MustCompile(`"profile_pic_url"\s*:\s*"([^"]+)"`)
+	if match := picRe.FindStringSubmatch(html); len(match) > 1 {
+		return match[1]
+	}
+
+	return ""
 }
