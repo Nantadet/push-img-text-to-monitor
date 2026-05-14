@@ -136,6 +136,12 @@ export function getWebSocketURL() {
   return url.toString()
 }
 
+export type Config = {
+  guestUrl: string
+}
+
+export const getConfig = () => request<Config>('/config')
+
 export const previewItem = (igUrl: string) =>
   request<PreviewItem>('/items/preview', {
     method: 'POST',

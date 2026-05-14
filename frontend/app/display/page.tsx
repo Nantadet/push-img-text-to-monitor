@@ -1,6 +1,9 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import QRCode from 'react-qr-code'
+import { useQuery } from '@tanstack/react-query'
+import { getConfig } from '@/lib/api'
 import {
   useCurrentDisplay,
   useDisplayCountdown,
@@ -26,6 +29,13 @@ export default function DisplayPage() {
   const current = currentQuery.data ?? null
   const remaining = useDisplayCountdown(current)
   const finishingIdRef = useRef<string | null>(null)
+
+  const configQuery = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
 
   useEffect(() => {
     if (!current || current.status !== 'displaying') {
@@ -56,6 +66,7 @@ export default function DisplayPage() {
   }
 
   const isInstagram = current.sourceType === 'instagram'
+  const guestUrl = configQuery.data?.guestUrl ?? ''
 
   return (
     <main className={`flex h-screen w-screen items-center justify-center gap-10 md:gap-16 ${DISPLAY_BG} px-8 md:px-16`}>
@@ -95,13 +106,15 @@ export default function DisplayPage() {
           </h2>
         )}
 
-        {/* QR placeholder — user will customize */}
-        <div className="mt-4 flex flex-col items-start gap-2">
-          <div className="flex h-28 w-28 items-center justify-center rounded-xl bg-white/10 backdrop-blur-sm md:h-32 md:w-32">
-            <span className="text-sm text-white/40">QR</span>
+        {/* QR Code — scan to open guest page */}
+        {guestUrl && (
+          <div className="mt-4 flex flex-col items-start gap-3">
+            <div className="rounded-xl bg-white p-3">
+              <QRCode value={guestUrl} size={140} />
+            </div>
+            <span className="text-base text-white/70 md:text-lg">Scan to submit</span>
           </div>
-          <span className="text-base text-white/50 md:text-lg">Scan to submit</span>
-        </div>
+        )}
       </div>
     </main>
   )

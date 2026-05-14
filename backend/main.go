@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 
 	"github.com/HLLC-MFU/hllc-workshop-backend/auth"
@@ -44,6 +45,21 @@ func main() {
 
 	app.Get("/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"ok": true})
+	})
+
+	// Server config for QR code generation (LAN IP + guest URL)
+	app.Get("/config", func(c fiber.Ctx) error {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "3000"
+		}
+		lanIP := getLANIP()
+		if lanIP == "" {
+			lanIP = "localhost"
+		}
+		return c.JSON(fiber.Map{
+			"guestUrl": "http://" + lanIP + ":" + port + "/guest",
+		})
 	})
 
 	// wire major: repository <- service <- handler
@@ -111,4 +127,21 @@ func main() {
 	})
 	log.Println("listening on :" + port)
 	log.Fatal(app.Listen(":" + port))
+}
+
+// getLANIP returns the first non-loopback IPv4 address.
+// Falls back to empty string if no suitable interface is found.
+func getLANIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
 }

@@ -524,10 +524,11 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 		_, _, username, _ = normalizeInstagramPath(u.Path)
 	}
 
-	// For posts/reels, try the embedded image_versions2 first — it usually has the uncropped original
+	// For posts/reels, try the embedded image_versions2 matched against og:image —
+	// this returns the uncropped original while ensuring it belongs to the requested post.
 	target, _ := parseInstagramURL(igURL)
 	if target.kind == instagramKindMedia {
-		image := extractImageVersionsFromHTML(htmlStr)
+		image := extractBestImageFromHTML(htmlStr)
 		if image != "" {
 			return &PreviewResponse{
 				IGURL:      igURL,
@@ -844,6 +845,101 @@ func findProfilePicInAnyJSON(value any) (image string, username string) {
 		}
 	}
 	return "", ""
+}
+
+// extractOGImageID extracts the image identifier from an Instagram CDN URL.
+// e.g. "https://.../587631845_..._n.jpg?..." → "587631845_..."
+func extractOGImageID(url string) string {
+	parts := strings.Split(url, "/")
+	for _, p := range parts {
+		if idx := strings.Index(p, "_n.jpg"); idx >= 0 {
+			return p[:idx]
+		}
+		if idx := strings.Index(p, "_n.webp"); idx >= 0 {
+			return p[:idx]
+		}
+	}
+	return ""
+}
+
+// extractBestImageFromHTML finds the image_versions2 block whose candidate URL matches
+// the og:image identifier. This avoids picking a random carousel/related-post image.
+func extractBestImageFromHTML(html string) string {
+	// Step 1: Find og:image URL to use as the anchor
+	idx := strings.Index(html, `property="og:image"`)
+	if idx < 0 {
+		return ""
+	}
+	contentStart := strings.Index(html[idx:], `content="`)
+	if contentStart < 0 {
+		return ""
+	}
+	contentStart += idx + len(`content="`)
+	contentEnd := strings.Index(html[contentStart:], `"`)
+	if contentEnd < 0 {
+		return ""
+	}
+	ogURL := strings.ReplaceAll(html[contentStart:contentStart+contentEnd], "&amp;", "&")
+	ogID := extractOGImageID(ogURL)
+	if ogID == "" {
+		return ogURL // fallback to the og:image itself
+	}
+
+	// Step 2: Scan all image_versions2 blocks and pick the one whose candidate URL
+	// contains the same image ID as the og:image.
+	searchStart := 0
+	for {
+		idx := strings.Index(html[searchStart:], `"image_versions2":`)
+		if idx < 0 {
+			break
+		}
+		idx += searchStart
+
+		start := idx + len(`"image_versions2":`)
+		depth := 0
+		end := start
+		for i := start; i < len(html); i++ {
+			if html[i] == '{' {
+				depth++
+			} else if html[i] == '}' {
+				depth--
+				if depth == 0 {
+					end = i + 1
+					break
+				}
+			}
+		}
+		if end <= start {
+			break
+		}
+
+		jsonStr := html[start:end]
+		jsonStr = strings.ReplaceAll(jsonStr, `\\u0025`, "%")
+		jsonStr = strings.ReplaceAll(jsonStr, `\\u0026`, "&")
+		jsonStr = strings.ReplaceAll(jsonStr, `\\u002F`, "/")
+		jsonStr = strings.ReplaceAll(jsonStr, `\\/`, "/")
+		jsonStr = strings.ReplaceAll(jsonStr, `&amp;`, "&")
+
+		var payload struct {
+			Candidates []struct {
+				URL string `json:"url"`
+			} `json:"candidates"`
+		}
+		if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+			searchStart = end
+			continue
+		}
+		if len(payload.Candidates) > 0 {
+			url := payload.Candidates[0].URL
+			if strings.Contains(url, ogID) {
+				return strings.TrimSpace(url)
+			}
+		}
+		searchStart = end
+	}
+
+	// Fallback to og:image if no matching image_versions2 found
+	return ogURL
 }
 
 // extractImageVersionsFromHTML extracts the highest-quality image URL from Instagram's embedded
