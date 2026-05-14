@@ -11,8 +11,10 @@ import (
 	"net/http/cookiejar"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -25,6 +27,53 @@ var (
 	usernameFromTitleRe    = regexp.MustCompile(`^(.*?) on Instagram:`)
 	instagramUsernameRe    = regexp.MustCompile(`^[A-Za-z0-9._]{1,30}$`)
 )
+
+const (
+	platformInstagram = "instagram"
+	platformTiktok    = "tiktok"
+	platformYoutube   = "youtube"
+	platformUnknown   = "unknown"
+)
+
+// youtubeCache stores resolved audio URLs with TTL.
+type youtubeCacheEntry struct {
+	url       string
+	expiresAt time.Time
+}
+
+var youtubeCache = struct {
+	sync.RWMutex
+	entries map[string]youtubeCacheEntry
+}{entries: make(map[string]youtubeCacheEntry)}
+
+func detectPlatform(rawURL string) string {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return platformUnknown
+	}
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case host == "instagram.com" || host == "www.instagram.com":
+		return platformInstagram
+	case host == "tiktok.com" || host == "www.tiktok.com":
+		return platformTiktok
+	case host == "youtube.com" || host == "www.youtube.com" || host == "youtu.be" || host == "music.youtube.com":
+		return platformYoutube
+	default:
+		return platformUnknown
+	}
+}
+
+func extractYouTubeVideoID(rawURL string) string {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	if u.Hostname() == "youtu.be" {
+		return strings.TrimPrefix(u.Path, "/")
+	}
+	return u.Query().Get("v")
+}
 
 type previewClient struct {
 	http          *http.Client
@@ -49,6 +98,21 @@ func newPreviewClient() *previewClient {
 }
 
 func (c *previewClient) Preview(ctx context.Context, rawURL string) (*PreviewResponse, error) {
+	platform := detectPlatform(rawURL)
+
+	switch platform {
+	case platformInstagram:
+		return c.previewInstagram(ctx, rawURL)
+	case platformTiktok:
+		return c.previewTiktok(ctx, rawURL)
+	case platformYoutube:
+		return c.previewYoutube(ctx, rawURL)
+	default:
+		return nil, errInvalidInstagramURL
+	}
+}
+
+func (c *previewClient) previewInstagram(ctx context.Context, rawURL string) (*PreviewResponse, error) {
 	target, ok := parseInstagramURL(rawURL)
 	if !ok {
 		return nil, errInvalidInstagramURL
@@ -106,6 +170,162 @@ func (c *previewClient) Preview(ctx context.Context, rawURL string) (*PreviewRes
 		return nil, fmt.Errorf("%w: set INSTAGRAM_OEMBED_ACCESS_TOKEN for reliable Instagram post and reel previews", errPreviewFetchFailed)
 	}
 	return nil, errPreviewFetchFailed
+}
+
+func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*PreviewResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, errPreviewFetchFailed
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://www.tiktok.com/")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: tiktok request failed", errPreviewFetchFailed)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("%w: tiktok returned %d", errPreviewFetchFailed, res.StatusCode)
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: tiktok read body failed", errPreviewFetchFailed)
+	}
+
+	htmlStr := string(body)
+	meta, _ := extractPreviewMetaFromBytes(body)
+
+	// Try to extract video from og:video
+	videoURL := ""
+	idx := strings.Index(htmlStr, `property="og:video"`)
+	if idx >= 0 {
+		contentStart := strings.Index(htmlStr[idx:], `content="`)
+		if contentStart >= 0 {
+			contentStart += idx + len(`content="`)
+			contentEnd := strings.Index(htmlStr[contentStart:], `"`)
+			if contentEnd >= 0 {
+				videoURL = strings.ReplaceAll(htmlStr[contentStart:contentStart+contentEnd], "&amp;", "&")
+			}
+		}
+	}
+
+	// Extract username from URL path
+	username := ""
+	if u, err := neturl.Parse(rawURL); err == nil {
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) >= 1 && parts[0] != "" {
+			username = parts[0]
+		}
+	}
+	if username == "" && meta.username != "" {
+		username = meta.username
+	}
+
+	// Fallback: use TikTok oEmbed for thumbnail
+	thumbnail := meta.image
+	if thumbnail == "" {
+		thumbnail = c.tiktokOEmbedThumbnail(ctx, rawURL)
+	}
+
+	return &PreviewResponse{
+		IGURL:      rawURL,
+		IGImageURL: thumbnail,
+		IGUsername: username,
+		VideoURL:   videoURL,
+	}, nil
+}
+
+func (c *previewClient) tiktokOEmbedThumbnail(ctx context.Context, rawURL string) string {
+	endpoint := "https://www.tiktok.com/oembed?url=" + neturl.QueryEscape(rawURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ""
+	}
+
+	var payload struct {
+		ThumbnailURL string `json:"thumbnail_url"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ""
+	}
+	return payload.ThumbnailURL
+}
+
+func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*PreviewResponse, error) {
+	videoID := extractYouTubeVideoID(rawURL)
+	if videoID == "" {
+		return nil, errInvalidInstagramURL
+	}
+
+	// Check cache first
+	youtubeCache.RLock()
+	entry, ok := youtubeCache.entries[videoID]
+	youtubeCache.RUnlock()
+
+	if ok && time.Now().Before(entry.expiresAt) {
+		return &PreviewResponse{
+			IGURL:      rawURL,
+			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+			AudioURL:   entry.url,
+		}, nil
+	}
+
+	// Resolve audio URL via yt-dlp
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "yt-dlp",
+		"--get-url",
+		"-f", "bestaudio[ext=m4a]/bestaudio",
+		"--no-warnings",
+		rawURL,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		// Fallback to thumbnail-only preview
+		return &PreviewResponse{
+			IGURL:      rawURL,
+			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+		}, nil
+	}
+
+	audioURL := strings.TrimSpace(string(out))
+	if audioURL == "" {
+		return &PreviewResponse{
+			IGURL:      rawURL,
+			IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+		}, nil
+	}
+
+	// Cache for 4 hours
+	youtubeCache.Lock()
+	youtubeCache.entries[videoID] = youtubeCacheEntry{
+		url:       audioURL,
+		expiresAt: time.Now().Add(4 * time.Hour),
+	}
+	youtubeCache.Unlock()
+
+	return &PreviewResponse{
+		IGURL:      rawURL,
+		IGImageURL: fmt.Sprintf("https://i.ytimg.com/vi/%s/maxresdefault.jpg", videoID),
+		AudioURL:   audioURL,
+	}, nil
 }
 
 func (c *previewClient) previewFromWebProfileInfo(ctx context.Context, target instagramTarget) (*PreviewResponse, error) {
@@ -526,14 +746,17 @@ func (c *previewClient) previewFromOpenGraph(ctx context.Context, igURL string) 
 
 	// For posts/reels, try the embedded image_versions2 matched against og:image —
 	// this returns the uncropped original while ensuring it belongs to the requested post.
+	// Also extract video URL for reels.
 	target, _ := parseInstagramURL(igURL)
 	if target.kind == instagramKindMedia {
 		image := extractBestImageFromHTML(htmlStr)
-		if image != "" {
+		video := extractVideoFromHTML(htmlStr)
+		if image != "" || video != "" {
 			return &PreviewResponse{
 				IGURL:      igURL,
 				IGImageURL: image,
 				IGUsername: username,
+				VideoURL:   video,
 			}, nil
 		}
 	}
@@ -989,6 +1212,48 @@ func extractImageVersionsFromHTML(html string) string {
 		return ""
 	}
 	return strings.TrimSpace(payload.Candidates[0].URL)
+}
+
+// extractVideoFromHTML searches for a video URL in Instagram HTML.
+// It checks og:video meta tags first, then falls back to video_url in embedded JSON.
+func extractVideoFromHTML(html string) string {
+	// Try 1: og:video meta tag
+	idx := strings.Index(html, `property="og:video"`)
+	if idx >= 0 {
+		contentStart := strings.Index(html[idx:], `content="`)
+		if contentStart >= 0 {
+			contentStart += idx + len(`content="`)
+			contentEnd := strings.Index(html[contentStart:], `"`)
+			if contentEnd >= 0 {
+				return strings.ReplaceAll(html[contentStart:contentStart+contentEnd], "&amp;", "&")
+			}
+		}
+	}
+
+	// Try 2: og:video:url (alternate property name)
+	idx = strings.Index(html, `property="og:video:url"`)
+	if idx >= 0 {
+		contentStart := strings.Index(html[idx:], `content="`)
+		if contentStart >= 0 {
+			contentStart += idx + len(`content="`)
+			contentEnd := strings.Index(html[contentStart:], `"`)
+			if contentEnd >= 0 {
+				return strings.ReplaceAll(html[contentStart:contentStart+contentEnd], "&amp;", "&")
+			}
+		}
+	}
+
+	// Try 3: video_url in embedded JSON
+	videoRe := regexp.MustCompile(`"video_url"\s*:\s*"([^"]+)"`)
+	if match := videoRe.FindStringSubmatch(html); len(match) > 1 {
+		url := match[1]
+		url = strings.ReplaceAll(url, `\\u0026`, "&")
+		url = strings.ReplaceAll(url, `\u0026`, "&")
+		url = strings.ReplaceAll(url, `&amp;`, "&")
+		return url
+	}
+
+	return ""
 }
 
 // extractProfilePicFromHTML searches the raw HTML for profile_pic_url using regex as a last resort.

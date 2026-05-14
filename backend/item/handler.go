@@ -42,6 +42,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) RegisterRoutes(app *fiber.App) {
 	app.Post("/items/preview", h.Preview)
 	app.Get("/items/image", h.ImageProxy)
+	app.Get("/items/media", h.MediaProxy)
 	app.Post("/items", h.Create)
 	app.Get("/uploads/items/:file", h.UploadedImage)
 
@@ -67,7 +68,12 @@ func (h *Handler) Preview(c fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	preview, err := h.svc.Preview(c.Context(), dto.IGURL)
+	url := dto.effectiveURL()
+	if url == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "url is required"})
+	}
+
+	preview, err := h.svc.Preview(c.Context(), url)
 	if err != nil {
 		return c.Status(422).JSON(fiber.Map{"error": err.Error()})
 	}
@@ -119,6 +125,104 @@ func (h *Handler) ImageProxy(c fiber.Ctx) error {
 	}
 
 	return c.Send(body)
+}
+
+func (h *Handler) MediaProxy(c fiber.Ctx) error {
+	raw := strings.TrimSpace(c.Query("src"))
+	if raw == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "missing media src"})
+	}
+
+	mediaURL, err := neturl.Parse(raw)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid media src"})
+	}
+
+	// Whitelist check
+	if !isAllowedMediaURL(mediaURL) {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid media src"})
+	}
+
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, mediaURL.String(), nil)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid media src"})
+	}
+
+	// Forward Range header for video/audio seeking
+	if rng := c.Get("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	// Set appropriate Referer based on domain
+	host := strings.ToLower(mediaURL.Hostname())
+	if strings.Contains(host, "instagram") || strings.Contains(host, "fbcdn") {
+		req.Header.Set("Referer", "https://www.instagram.com/")
+	} else if strings.Contains(host, "tiktok") {
+		req.Header.Set("Referer", "https://www.tiktok.com/")
+	} else if strings.Contains(host, "googlevideo") || strings.Contains(host, "youtube") {
+		req.Header.Set("Referer", "https://www.youtube.com/")
+	}
+
+	res, err := h.svc.preview.http.Do(req)
+	if err != nil {
+		return c.Status(502).JSON(fiber.Map{"error": "unable to fetch media"})
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return c.Status(502).JSON(fiber.Map{"error": "media unavailable"})
+	}
+
+	// Stream response back with proper headers
+	c.Set("Content-Type", res.Header.Get("Content-Type"))
+	c.Set("Accept-Ranges", res.Header.Get("Accept-Ranges"))
+	c.Set("Access-Control-Allow-Origin", "*")
+	if res.Header.Get("Content-Range") != "" {
+		c.Set("Content-Range", res.Header.Get("Content-Range"))
+	}
+	if res.Header.Get("Content-Length") != "" {
+		c.Set("Content-Length", res.Header.Get("Content-Length"))
+	}
+	c.Status(res.StatusCode)
+
+	// For large media files, stream instead of buffering
+	_, err = io.Copy(c.Response().BodyWriter(), res.Body)
+	if err != nil {
+		return c.Status(502).JSON(fiber.Map{"error": "unable to stream media"})
+	}
+	return nil
+}
+
+func isAllowedMediaURL(u *neturl.URL) bool {
+	if u == nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	allowedHosts := []string{
+		"cdninstagram.com", ".cdninstagram.com",
+		"fbcdn.net", ".fbcdn.net",
+		"instagram.com", "www.instagram.com",
+		"tiktok.com", "www.tiktok.com",
+		"tiktokcdn.com", ".tiktokcdn.com",
+		"googlevideo.com", ".googlevideo.com",
+		"ytimg.com", ".ytimg.com",
+		"youtube.com", "www.youtube.com",
+		"youtu.be",
+	}
+	for _, suffix := range allowedHosts {
+		if strings.HasPrefix(suffix, ".") {
+			if strings.HasSuffix(host, suffix) {
+				return true
+			}
+		} else if host == suffix {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) Create(c fiber.Ctx) error {

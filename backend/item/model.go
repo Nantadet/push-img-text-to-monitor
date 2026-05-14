@@ -13,6 +13,8 @@ const (
 	StatusDisplayed  = "displayed"
 
 	SourceInstagram = "instagram"
+	SourceTiktok    = "tiktok"
+	SourceYoutube   = "youtube"
 	SourceImage     = "image"
 	SourceText      = "text"
 )
@@ -23,6 +25,8 @@ type Item struct {
 	IGURL                string        `bson:"igUrl"`
 	IGImageURL           string        `bson:"igImageUrl"`
 	IGUsername           string        `bson:"igUsername"`
+	VideoURL             string        `bson:"videoUrl"`
+	AudioURL             string        `bson:"audioUrl"`
 	Message              string        `bson:"message"`
 	Status               string        `bson:"status"`
 	DisplayMinutes       int           `bson:"displayMinutes,omitempty"`
@@ -38,6 +42,8 @@ type ItemResponse struct {
 	IGURL          string     `json:"igUrl"`
 	IGImageURL     string     `json:"igImageUrl"`
 	IGUsername     string     `json:"igUsername"`
+	VideoURL       string     `json:"videoUrl"`
+	AudioURL       string     `json:"audioUrl"`
 	Message        string     `json:"message"`
 	Status         string     `json:"status"`
 	DisplayMinutes int        `json:"displayMinutes"`
@@ -93,6 +99,8 @@ func toResponse(it *Item) *ItemResponse {
 		IGURL:          it.IGURL,
 		IGImageURL:     it.IGImageURL,
 		IGUsername:     it.IGUsername,
+		VideoURL:       it.VideoURL,
+		AudioURL:       it.AudioURL,
 		Message:        it.Message,
 		Status:         it.Status,
 		DisplayMinutes: it.displayMinutesValue(),

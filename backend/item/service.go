@@ -46,18 +46,23 @@ func (s *Service) Create(ctx context.Context, dto CreateItemDTO) (*ItemResponse,
 	}
 
 	switch it.SourceType {
-	case SourceInstagram:
-		igURL := strings.TrimSpace(dto.IGURL)
-		if igURL == "" {
-			return nil, errors.New("instagram url is required")
+	case SourceInstagram, SourceTiktok, SourceYoutube:
+		url := strings.TrimSpace(dto.URL)
+		if url == "" {
+			url = strings.TrimSpace(dto.IGURL)
 		}
-		preview, err := s.Preview(ctx, igURL)
+		if url == "" {
+			return nil, errors.New("url is required")
+		}
+		preview, err := s.Preview(ctx, url)
 		if err != nil {
 			return nil, err
 		}
 		it.IGURL = preview.IGURL
 		it.IGImageURL = preview.IGImageURL
 		it.IGUsername = preview.IGUsername
+		it.VideoURL = preview.VideoURL
+		it.AudioURL = preview.AudioURL
 	case SourceImage:
 		it.IGImageURL = strings.TrimSpace(dto.IGImageURL)
 		it.IGUsername = strings.TrimSpace(dto.IGUsername)
@@ -95,8 +100,20 @@ func normalizeSourceType(dto CreateItemDTO) string {
 	if sourceType != "" {
 		return sourceType
 	}
-	if strings.TrimSpace(dto.IGURL) != "" {
-		return SourceInstagram
+	url := strings.TrimSpace(dto.URL)
+	if url == "" {
+		url = strings.TrimSpace(dto.IGURL)
+	}
+	if url != "" {
+		platform := detectPlatform(url)
+		switch platform {
+		case platformInstagram:
+			return SourceInstagram
+		case platformTiktok:
+			return SourceTiktok
+		case platformYoutube:
+			return SourceYoutube
+		}
 	}
 	if strings.TrimSpace(dto.IGImageURL) != "" {
 		return SourceImage

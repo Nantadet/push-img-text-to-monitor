@@ -1,12 +1,14 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000'
-const INSTAGRAM_IMAGE_HOSTS = ['cdninstagram.com', 'fbcdn.net']
+const PROXY_HOSTS = ['cdninstagram.com', 'fbcdn.net', 'tiktokcdn.com', 'googlevideo.com']
 
 export type DisplayItem = {
   id: string
-  sourceType: 'instagram' | 'image' | 'text'
+  sourceType: 'instagram' | 'tiktok' | 'youtube' | 'image' | 'text'
   igUrl: string
   igImageUrl: string
   igUsername: string
+  videoUrl: string
+  audioUrl: string
   message: string
   status: 'queued' | 'displaying' | 'skipped' | 'displayed'
   displayMinutes: number
@@ -19,12 +21,14 @@ export type PreviewItem = {
   igUrl: string
   igImageUrl: string
   igUsername: string
+  videoUrl: string
+  audioUrl: string
 }
 
 export type CreateDisplayItemInput =
   | {
-      sourceType: 'instagram'
-      igUrl: string
+      sourceType: 'instagram' | 'tiktok' | 'youtube'
+      url: string
       message: string
     }
   | {
@@ -88,36 +92,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T
   const data = await res.json()
-  return withProxiedInstagramImages(data) as T
+  return withProxiedMedia(data) as T
 }
 
-function withProxiedInstagramImages(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withProxiedInstagramImages)
+function withProxiedMedia(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withProxiedMedia)
   if (!value || typeof value !== 'object') return value
 
   const out: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value)) {
-    out[key] = key === 'igImageUrl' && typeof item === 'string' ? toImageProxyURL(item) : withProxiedInstagramImages(item)
+    if (typeof item === 'string' && (key === 'igImageUrl' || key === 'videoUrl' || key === 'audioUrl')) {
+      out[key] = toMediaProxyURL(item)
+    } else {
+      out[key] = withProxiedMedia(item)
+    }
   }
   return out
 }
 
-function toImageProxyURL(imageUrl: string) {
-  if (!imageUrl) return imageUrl
+function toMediaProxyURL(mediaUrl: string) {
+  if (!mediaUrl) return mediaUrl
 
   try {
-    const parsed = new URL(imageUrl)
+    const parsed = new URL(mediaUrl)
     const apiURL = new URL(API_URL)
-    if (parsed.origin === apiURL.origin && parsed.pathname === '/items/image') return imageUrl
+    if (parsed.origin === apiURL.origin && parsed.pathname === '/items/media') return mediaUrl
 
     const allowed =
-      INSTAGRAM_IMAGE_HOSTS.some((host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`)) ||
+      PROXY_HOSTS.some((host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`)) ||
       isInstagramMediaImageURL(parsed)
-    if (!allowed) return imageUrl
+    if (!allowed) return mediaUrl
 
-    return `${apiURL.origin}/items/image?src=${encodeURIComponent(imageUrl)}`
+    return `${apiURL.origin}/items/media?src=${encodeURIComponent(mediaUrl)}`
   } catch {
-    return imageUrl
+    return mediaUrl
   }
 }
 
@@ -142,10 +150,10 @@ export type Config = {
 
 export const getConfig = () => request<Config>('/config')
 
-export const previewItem = (igUrl: string) =>
+export const previewItem = (url: string) =>
   request<PreviewItem>('/items/preview', {
     method: 'POST',
-    body: JSON.stringify({ igUrl }),
+    body: JSON.stringify({ url }),
   })
 
 export const createDisplayItem = (input: CreateDisplayItemInput) => {

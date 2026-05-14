@@ -3,34 +3,58 @@
 import { useEffect, useState } from 'react'
 import { useCreateDisplayItem, usePreviewDisplayItem } from '@/lib/hooks/use-live-display'
 
-type SubmitMode = 'instagram' | 'image' | 'text'
+type SubmitMode = 'link' | 'image' | 'text'
+type Platform = 'instagram' | 'tiktok' | 'youtube' | 'unknown'
 
 const submitModes: Array<{ value: SubmitMode; label: string }> = [
-  { value: 'instagram', label: 'Instagram + Message' },
+  { value: 'link', label: 'Link + Message' },
   { value: 'image', label: 'Image + Message' },
   { value: 'text', label: 'Message Only' },
 ]
+
+function detectPlatform(url: string): Platform {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.toLowerCase()
+    if (host === 'instagram.com' || host === 'www.instagram.com') return 'instagram'
+    if (host === 'tiktok.com' || host === 'www.tiktok.com') return 'tiktok'
+    if (host === 'youtube.com' || host === 'www.youtube.com' || host === 'youtu.be' || host === 'music.youtube.com') return 'youtube'
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+function platformLabel(platform: Platform): string {
+  switch (platform) {
+    case 'instagram': return 'Instagram'
+    case 'tiktok': return 'TikTok'
+    case 'youtube': return 'YouTube'
+    default: return 'Link'
+  }
+}
 
 export default function GuestPage() {
   const previewMutation = usePreviewDisplayItem()
   const createMutation = useCreateDisplayItem()
 
-  const [mode, setMode] = useState<SubmitMode>('instagram')
-  const [igUrl, setIGUrl] = useState('')
+  const [mode, setMode] = useState<SubmitMode>('link')
+  const [url, setUrl] = useState('')
   const [message, setMessage] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imageInputKey, setImageInputKey] = useState(0)
   const [imagePreviewURL, setImagePreviewURL] = useState('')
   const [previewKey, setPreviewKey] = useState('')
 
-  const trimmedIGUrl = igUrl.trim()
+  const trimmedUrl = url.trim()
   const trimmedMessage = message.trim()
-  const instagramPreview =
-    mode === 'instagram' && previewMutation.data && previewKey === trimmedIGUrl ? previewMutation.data : null
-  const previewImageURL = mode === 'instagram' ? instagramPreview?.igImageUrl : imagePreviewURL
+  const platform = detectPlatform(trimmedUrl)
+  const linkPreview =
+    mode === 'link' && previewMutation.data && previewKey === trimmedUrl ? previewMutation.data : null
+  const previewImageURL = mode === 'link' ? linkPreview?.igImageUrl : imagePreviewURL
   const canSubmit = Boolean(
     trimmedMessage.length > 0 &&
-      ((mode === 'instagram' && trimmedIGUrl.length > 0) || (mode === 'image' && imageFile) || mode === 'text'),
+      ((mode === 'link' && trimmedUrl.length > 0) || (mode === 'image' && imageFile) || mode === 'text'),
   )
 
   useEffect(() => {
@@ -47,20 +71,20 @@ export default function GuestPage() {
   function handleModeChange(nextMode: SubmitMode) {
     setMode(nextMode)
     createMutation.reset()
-    if (nextMode !== 'instagram') {
+    if (nextMode !== 'link') {
       setPreviewKey('')
       previewMutation.reset()
     }
   }
 
   async function handlePreview() {
-    if (!trimmedIGUrl) return false
+    if (!trimmedUrl) return false
 
     setPreviewKey('')
     previewMutation.reset()
     try {
-      await previewMutation.mutateAsync(trimmedIGUrl)
-      setPreviewKey(trimmedIGUrl)
+      await previewMutation.mutateAsync(trimmedUrl)
+      setPreviewKey(trimmedUrl)
       return true
     } catch {
       return false
@@ -72,18 +96,18 @@ export default function GuestPage() {
     if (!trimmedMessage) return
 
     try {
-      if (mode === 'instagram') {
-        if (!trimmedIGUrl) return
-        if (!instagramPreview) {
+      if (mode === 'link') {
+        if (!trimmedUrl) return
+        if (!linkPreview) {
           const previewLoaded = await handlePreview()
           if (!previewLoaded) return
         }
         await createMutation.mutateAsync({
-          sourceType: 'instagram',
-          igUrl: trimmedIGUrl,
+          sourceType: platform === 'unknown' ? 'instagram' : platform,
+          url: trimmedUrl,
           message: trimmedMessage,
         })
-        setIGUrl('')
+        setUrl('')
         setPreviewKey('')
         previewMutation.reset()
       } else if (mode === 'image') {
@@ -107,6 +131,9 @@ export default function GuestPage() {
       return
     }
   }
+
+  const hasVideoPreview = Boolean(linkPreview?.videoUrl)
+  const hasAudioPreview = Boolean(linkPreview?.audioUrl)
 
   return (
     <main className="min-h-screen px-6 py-10 md:px-10">
@@ -139,16 +166,18 @@ export default function GuestPage() {
               </div>
             </div>
 
-            {mode === 'instagram' ? (
+            {mode === 'link' ? (
               <label className="block">
-                <span className="mb-2 block text-sm font-medium text-stone-800">Instagram URL</span>
+                <span className="mb-2 block text-sm font-medium text-stone-800">
+                  {platformLabel(platform)} URL
+                </span>
                 <input
-                  value={igUrl}
+                  value={url}
                   onChange={(e) => {
-                    setIGUrl(e.target.value)
+                    setUrl(e.target.value)
                     setPreviewKey('')
                   }}
-                  placeholder="https://www.instagram.com/..."
+                  placeholder="https://www.instagram.com/...  or  tiktok.com/...  or  youtube.com/..."
                   className="w-full rounded-2xl border border-[var(--line)] bg-[var(--panel-strong)] px-4 py-3 text-sm outline-none transition focus:border-[var(--accent)]"
                 />
               </label>
@@ -180,11 +209,11 @@ export default function GuestPage() {
             </label>
 
             <div className="flex flex-wrap gap-3">
-              {mode === 'instagram' ? (
+              {mode === 'link' ? (
                 <button
                   type="button"
                   onClick={handlePreview}
-                  disabled={previewMutation.isPending || !trimmedIGUrl}
+                  disabled={previewMutation.isPending || !trimmedUrl}
                   className="rounded-full bg-stone-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
                 >
                   {previewMutation.isPending ? 'Loading preview...' : 'Load Preview'}
@@ -203,21 +232,54 @@ export default function GuestPage() {
         <aside className="panel flex flex-col rounded-[28px] p-6 md:p-8">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">preview</p>
           <div className="mt-5 flex-1 overflow-hidden rounded-[24px] border border-[var(--line)] bg-white">
-            {previewImageURL ? (
+            {hasVideoPreview ? (
+              <>
+                <video
+                  src={linkPreview?.videoUrl}
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  className="h-[360px] w-full object-cover"
+                />
+                <PreviewMessage
+                  title={linkPreview?.igUsername || platformLabel(platform)}
+                  message={trimmedMessage}
+                  igUrl={linkPreview?.igUrl}
+                />
+              </>
+            ) : hasAudioPreview ? (
+              <div className="flex h-[360px] flex-col items-center justify-center gap-4 bg-gradient-to-br from-stone-900 to-black">
+                {previewImageURL && (
+                  <img src={previewImageURL} alt="" className="h-48 w-48 rounded-xl object-cover" />
+                )}
+                <div className="flex items-center gap-2 text-white/80">
+                  <svg className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+                  </svg>
+                  <span className="text-lg font-medium">Audio Preview</span>
+                </div>
+                <PreviewMessage
+                  title={platformLabel(platform)}
+                  message={trimmedMessage}
+                  igUrl={linkPreview?.igUrl}
+                />
+              </div>
+            ) : previewImageURL ? (
               <>
                 <img
                   src={previewImageURL}
-                  alt={trimmedMessage || instagramPreview?.igUsername || 'submission preview'}
+                  alt={trimmedMessage || linkPreview?.igUsername || 'submission preview'}
                   className="h-[360px] w-full object-cover"
                 />
                 <PreviewMessage
                   title={
-                    mode === 'instagram'
-                      ? instagramPreview?.igUsername || 'Instagram'
+                    mode === 'link'
+                      ? linkPreview?.igUsername || platformLabel(platform)
                       : imageFile?.name || 'Uploaded Image'
                   }
                   message={trimmedMessage}
-                  igUrl={mode === 'instagram' ? instagramPreview?.igUrl : ''}
+                  igUrl={mode === 'link' ? linkPreview?.igUrl : ''}
                 />
               </>
             ) : mode === 'text' ? (
@@ -233,16 +295,16 @@ export default function GuestPage() {
               <div className="flex h-[480px] flex-col justify-between p-5">
                 <div>
                   <p className="text-2xl">
-                    {mode === 'instagram' ? 'Waiting for Instagram preview' : 'Waiting for image'}
+                    {mode === 'link' ? 'Waiting for link preview' : 'Waiting for image'}
                   </p>
                   <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                    {mode === 'instagram'
-                      ? 'Load preview to check the Instagram image before sending.'
+                    {mode === 'link'
+                      ? 'Load preview to check the content before sending.'
                       : 'Choose an image to preview it before sending.'}
                   </p>
                 </div>
                 <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-                  {mode === 'instagram' ? 'public profile / post / reel' : 'jpg / png / webp / gif'}
+                  {mode === 'link' ? 'instagram / tiktok / youtube' : 'jpg / png / webp / gif'}
                 </p>
               </div>
             )}
@@ -275,7 +337,7 @@ function PreviewMessage({ title, message, igUrl }: { title: string; message: str
           rel="noreferrer"
           className="inline-flex rounded-full border border-[var(--line)] px-4 py-2 text-sm text-stone-700 hover:border-[var(--accent)]"
         >
-          Open Instagram
+          Open Link
         </a>
       ) : null}
     </div>
