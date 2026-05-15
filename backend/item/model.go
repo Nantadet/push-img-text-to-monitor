@@ -95,15 +95,25 @@ func toResponse(it *Item) *ItemResponse {
 		return nil
 	}
 
+	sourceType := it.sourceTypeValue()
+	embedURL := it.EmbedURL
+	if sourceType == SourceTiktok {
+		if normalized := tiktokEmbedURL(embedURL); normalized != "" {
+			embedURL = normalized
+		} else if normalized := tiktokEmbedURL(it.IGURL); normalized != "" {
+			embedURL = normalized
+		}
+	}
+
 	return &ItemResponse{
 		ID:             it.ID.Hex(),
-		SourceType:     it.sourceTypeValue(),
+		SourceType:     sourceType,
 		IGURL:          it.IGURL,
 		IGImageURL:     it.IGImageURL,
 		IGUsername:     it.IGUsername,
 		VideoURL:       it.VideoURL,
 		AudioURL:       it.AudioURL,
-		EmbedURL:       it.EmbedURL,
+		EmbedURL:       embedURL,
 		Message:        it.Message,
 		Status:         it.Status,
 		DisplayMinutes: it.displayMinutesValue(),

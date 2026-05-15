@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import QRCode from 'react-qr-code'
 import { useQuery } from '@tanstack/react-query'
 import { getConfig } from '@/lib/api'
@@ -24,6 +24,14 @@ export default function DisplayPage() {
   const [showVideo, setShowVideo] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
+  const playTikTokIframe = useCallback(() => {
+    const frame = iframeRef.current
+    if (!frame?.contentWindow) return
+
+    frame.contentWindow.postMessage({ type: 'mute', 'x-tiktok-player': true }, '*')
+    frame.contentWindow.postMessage({ type: 'play', 'x-tiktok-player': true }, '*')
+  }, [])
+
   const configQuery = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
@@ -46,17 +54,25 @@ export default function DisplayPage() {
     setShowVideo(isVideo && Boolean(current.embedUrl))
   }, [current?.id, current?.embedUrl, current?.sourceType, current?.videoUrl, current?.audioUrl, current?.igUrl])
 
-  // Auto-reload TikTok iframe every 20s to loop the clip
   useEffect(() => {
     if (current?.sourceType !== 'tiktok' || !current?.embedUrl) return
-    const iv = setInterval(() => {
-      const el = iframeRef.current
-      if (el) {
-        el.src = el.src
+
+    const handleMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; ['x-tiktok-player']?: boolean } | null
+      if (!data?.['x-tiktok-player']) return
+      if (data.type === 'onPlayerReady') {
+        playTikTokIframe()
       }
-    }, 20000)
-    return () => clearInterval(iv)
-  }, [current?.id, current?.embedUrl])
+    }
+
+    window.addEventListener('message', handleMessage)
+    const timers = [window.setTimeout(playTikTokIframe, 500), window.setTimeout(playTikTokIframe, 1500)]
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      timers.forEach((timer) => window.clearTimeout(timer))
+    }
+  }, [current?.id, current?.embedUrl, current?.sourceType, playTikTokIframe])
 
   useEffect(() => {
     if (!current || current.status !== 'displaying') {
@@ -87,6 +103,7 @@ export default function DisplayPage() {
   const isTiktok = current.sourceType === 'tiktok'
   const isYoutube = current.sourceType === 'youtube'
   const hasEmbed = Boolean(current.embedUrl)
+  const hasDirectVideo = Boolean(current.videoUrl)
   const guestUrl = configQuery.data?.guestUrl ?? ''
 
   // Only use iframe for video clips (YouTube, TikTok, Instagram Reels)
@@ -106,14 +123,24 @@ export default function DisplayPage() {
       {/* LEFT — Media */}
       <div className="flex-shrink-0" style={{ pointerEvents: 'none' }}>
         <div className="relative h-[70vh] w-[52vh] overflow-hidden rounded-2xl shadow-2xl bg-black">
-          {isVideoContent && hasEmbed && showVideo ? (
+          {hasDirectVideo ? (
+            <video
+              src={current.videoUrl}
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="h-full w-full bg-black object-contain"
+            />
+          ) : isVideoContent && hasEmbed && showVideo ? (
             <iframe
               ref={iframeRef}
               src={current.embedUrl}
               className="h-full w-full"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
               allowFullScreen
               loading="eager"
+              onLoad={isTiktok ? playTikTokIframe : undefined}
               style={{ pointerEvents: 'auto' }}
             />
           ) : current.igImageUrl ? (

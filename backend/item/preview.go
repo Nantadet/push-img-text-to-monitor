@@ -22,10 +22,12 @@ import (
 
 var (
 	errInvalidInstagramURL = errors.New("invalid instagram url")
-	errPreviewFetchFailed  = errors.New("unable to fetch instagram preview")
+	errInvalidPreviewURL   = errors.New("invalid or unsupported url")
+	errPreviewFetchFailed  = errors.New("unable to fetch preview")
 	errWebProfileBlocked   = errors.New("instagram web_profile_info blocked: rate limited or missing browser cookie")
 	usernameFromTitleRe    = regexp.MustCompile(`^(.*?) on Instagram:`)
 	instagramUsernameRe    = regexp.MustCompile(`^[A-Za-z0-9._]{1,30}$`)
+	tiktokEmbedIDRe        = regexp.MustCompile(`tiktok\.com/(?:embed/v2|player/v1)/(\d+)`)
 )
 
 const (
@@ -55,12 +57,21 @@ func detectPlatform(rawURL string) string {
 	switch {
 	case host == "instagram.com" || host == "www.instagram.com":
 		return platformInstagram
-	case host == "tiktok.com" || host == "www.tiktok.com":
+	case isTikTokHost(host):
 		return platformTiktok
 	case host == "youtube.com" || host == "www.youtube.com" || host == "youtu.be" || host == "music.youtube.com":
 		return platformYoutube
 	default:
 		return platformUnknown
+	}
+}
+
+func isTikTokHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com", "vt.tiktok.com":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -108,7 +119,7 @@ func (c *previewClient) Preview(ctx context.Context, rawURL string) (*PreviewRes
 	case platformYoutube:
 		return c.previewYoutube(ctx, rawURL)
 	default:
-		return nil, errInvalidInstagramURL
+		return nil, errInvalidPreviewURL
 	}
 }
 
@@ -173,6 +184,38 @@ func (c *previewClient) previewInstagram(ctx context.Context, rawURL string) (*P
 }
 
 func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*PreviewResponse, error) {
+	pagePreview, pageErr := c.previewTiktokFromPage(ctx, rawURL)
+	if pageErr == nil && hasPreviewMedia(pagePreview) {
+		if pagePreview.IGImageURL != "" && pagePreview.EmbedURL != "" {
+			return pagePreview, nil
+		}
+		oembedPreview, oembedErr := c.previewTiktokFromOEmbed(ctx, rawURL)
+		if oembedErr == nil {
+			mergePreview(pagePreview, oembedPreview)
+		}
+		return pagePreview, nil
+	}
+
+	if pageErr == nil {
+		pageErr = fmt.Errorf("%w: tiktok page returned no preview", errPreviewFetchFailed)
+	}
+
+	oembedPreview, oembedErr := c.previewTiktokFromOEmbed(ctx, rawURL)
+	if oembedErr == nil {
+		return oembedPreview, nil
+	}
+	if fallback := previewTiktokFromURL(rawURL); fallback != nil {
+		return fallback, nil
+	}
+
+	return nil, fmt.Errorf("%w: tiktok page failed (%v); tiktok oembed failed (%v)", errPreviewFetchFailed, pageErr, oembedErr)
+}
+
+func hasPreviewMedia(preview *PreviewResponse) bool {
+	return preview != nil && (preview.IGImageURL != "" || preview.VideoURL != "" || preview.AudioURL != "" || preview.EmbedURL != "")
+}
+
+func (c *previewClient) previewTiktokFromPage(ctx context.Context, rawURL string) (*PreviewResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, errPreviewFetchFailed
@@ -189,6 +232,9 @@ func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*Prev
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if fallback := previewTiktokFromURL(responseURL(res, rawURL)); fallback != nil {
+			return fallback, nil
+		}
 		return nil, fmt.Errorf("%w: tiktok returned %d", errPreviewFetchFailed, res.StatusCode)
 	}
 
@@ -199,6 +245,7 @@ func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*Prev
 
 	htmlStr := string(body)
 	meta, _ := extractPreviewMetaFromBytes(body)
+	finalURL := responseURL(res, rawURL)
 
 	// Try to extract video from og:video
 	videoURL := ""
@@ -215,34 +262,16 @@ func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*Prev
 	}
 
 	// Extract username from URL path
-	username := ""
-	if u, err := neturl.Parse(rawURL); err == nil {
-		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) >= 1 && parts[0] != "" {
-			username = parts[0]
-		}
-	}
+	username := tiktokUsernameFromURL(finalURL)
 	if username == "" && meta.username != "" {
 		username = meta.username
 	}
 
-	// Fallback: use TikTok oEmbed for thumbnail
 	thumbnail := meta.image
-	if thumbnail == "" {
-		thumbnail = c.tiktokOEmbedThumbnail(ctx, rawURL)
-	}
-
-	// Build embed URL for TikTok
-	embedURL := ""
-	if u, err := neturl.Parse(rawURL); err == nil {
-		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) >= 3 {
-			embedURL = fmt.Sprintf("https://www.tiktok.com/embed/v2/%s?autoplay=1", parts[len(parts)-1])
-		}
-	}
+	embedURL := tiktokEmbedURL(finalURL)
 
 	return &PreviewResponse{
-		IGURL:      rawURL,
+		IGURL:      finalURL,
 		IGImageURL: thumbnail,
 		IGUsername: username,
 		VideoURL:   videoURL,
@@ -250,37 +279,179 @@ func (c *previewClient) previewTiktok(ctx context.Context, rawURL string) (*Prev
 	}, nil
 }
 
-func (c *previewClient) tiktokOEmbedThumbnail(ctx context.Context, rawURL string) string {
+func (c *previewClient) previewTiktokFromOEmbed(ctx context.Context, rawURL string) (*PreviewResponse, error) {
 	endpoint := "https://www.tiktok.com/oembed?url=" + neturl.QueryEscape(rawURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return ""
+		return nil, errPreviewFetchFailed
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json")
 
 	res, err := c.http.Do(req)
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("%w: tiktok oembed request failed", errPreviewFetchFailed)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return ""
+		return nil, fmt.Errorf("%w: tiktok oembed returned %d", errPreviewFetchFailed, res.StatusCode)
 	}
 
 	var payload struct {
-		ThumbnailURL string `json:"thumbnail_url"`
+		AuthorName     string `json:"author_name"`
+		AuthorUniqueID string `json:"author_unique_id"`
+		HTML           string `json:"html"`
+		ThumbnailURL   string `json:"thumbnail_url"`
+		Title          string `json:"title"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("%w: tiktok oembed decode failed", errPreviewFetchFailed)
+	}
+
+	embedURL := tiktokEmbedURL(rawURL)
+	if embedURL == "" {
+		embedURL = tiktokEmbedURLFromHTML(payload.HTML)
+	}
+	username := firstNonEmpty(
+		formatTikTokUsername(payload.AuthorUniqueID),
+		formatTikTokUsername(payload.AuthorName),
+		tiktokUsernameFromURL(rawURL),
+	)
+	if payload.ThumbnailURL == "" && embedURL == "" {
+		return nil, fmt.Errorf("%w: tiktok oembed returned no preview", errPreviewFetchFailed)
+	}
+
+	return &PreviewResponse{
+		IGURL:      rawURL,
+		IGImageURL: strings.TrimSpace(payload.ThumbnailURL),
+		IGUsername: username,
+		EmbedURL:   embedURL,
+	}, nil
+}
+
+func previewTiktokFromURL(rawURL string) *PreviewResponse {
+	embedURL := tiktokEmbedURL(rawURL)
+	if embedURL == "" {
+		return nil
+	}
+	return &PreviewResponse{
+		IGURL:      rawURL,
+		IGUsername: tiktokUsernameFromURL(rawURL),
+		EmbedURL:   embedURL,
+	}
+}
+
+func responseURL(res *http.Response, fallback string) string {
+	if res != nil && res.Request != nil && res.Request.URL != nil {
+		return res.Request.URL.String()
+	}
+	return fallback
+}
+
+func mergePreview(dst *PreviewResponse, src *PreviewResponse) {
+	if dst == nil || src == nil {
+		return
+	}
+	if dst.IGURL == "" {
+		dst.IGURL = src.IGURL
+	}
+	if dst.IGImageURL == "" {
+		dst.IGImageURL = src.IGImageURL
+	}
+	if dst.IGUsername == "" {
+		dst.IGUsername = src.IGUsername
+	}
+	if dst.VideoURL == "" {
+		dst.VideoURL = src.VideoURL
+	}
+	if dst.AudioURL == "" {
+		dst.AudioURL = src.AudioURL
+	}
+	if dst.EmbedURL == "" {
+		dst.EmbedURL = src.EmbedURL
+	}
+}
+
+func tiktokEmbedURL(rawURL string) string {
+	videoID := tiktokVideoIDFromURL(rawURL)
+	if videoID == "" {
 		return ""
 	}
-	return payload.ThumbnailURL
+	return fmt.Sprintf("https://www.tiktok.com/player/v1/%s?autoplay=1&muted=1&loop=1&controls=0&progress_bar=0&play_button=0&volume_control=0&fullscreen_button=0&rel=0", videoID)
+}
+
+func tiktokEmbedURLFromHTML(rawHTML string) string {
+	match := tiktokEmbedIDRe.FindStringSubmatch(rawHTML)
+	if len(match) != 2 {
+		return ""
+	}
+	return tiktokEmbedURL("https://www.tiktok.com/@user/video/" + match[1])
+}
+
+func tiktokVideoIDFromURL(rawURL string) string {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i, part := range parts {
+		if part == "video" && i+1 < len(parts) {
+			return strings.TrimSpace(parts[i+1])
+		}
+		if part == "v" && i+1 < len(parts) {
+			return strings.TrimSpace(parts[i+1])
+		}
+		if part == "embed" && i+2 < len(parts) && parts[i+1] == "v2" {
+			return strings.TrimSpace(parts[i+2])
+		}
+		if part == "player" && i+2 < len(parts) && parts[i+1] == "v1" {
+			return strings.TrimSpace(parts[i+2])
+		}
+	}
+	return ""
+}
+
+func tiktokUsernameFromURL(rawURL string) string {
+	u, err := neturl.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	for _, part := range strings.Split(strings.Trim(u.Path, "/"), "/") {
+		if strings.HasPrefix(part, "@") && len(part) > 1 {
+			return part
+		}
+	}
+	return ""
+}
+
+func formatTikTokUsername(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "@") {
+		return value
+	}
+	if strings.Contains(value, " ") {
+		return value
+	}
+	return "@" + value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (c *previewClient) previewYoutube(ctx context.Context, rawURL string) (*PreviewResponse, error) {
 	videoID := extractYouTubeVideoID(rawURL)
 	if videoID == "" {
-		return nil, errInvalidInstagramURL
+		return nil, errInvalidPreviewURL
 	}
 
 	// Check cache first

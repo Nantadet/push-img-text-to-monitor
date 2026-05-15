@@ -17,7 +17,7 @@ function detectPlatform(url: string): Platform {
     const u = new URL(url)
     const host = u.hostname.toLowerCase()
     if (host === 'instagram.com' || host === 'www.instagram.com') return 'instagram'
-    if (host === 'tiktok.com' || host === 'www.tiktok.com') return 'tiktok'
+    if (['tiktok.com', 'www.tiktok.com', 'm.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com'].includes(host)) return 'tiktok'
     if (host === 'youtube.com' || host === 'www.youtube.com' || host === 'youtu.be' || host === 'music.youtube.com') return 'youtube'
     return 'unknown'
   } catch {
