@@ -1,5 +1,23 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000'
+const CONFIGURED_API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000'
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 const PROXY_HOSTS = ['cdninstagram.com', 'fbcdn.net', 'tiktokcdn.com', 'googlevideo.com']
+
+function getAPIURL() {
+  const raw = CONFIGURED_API_URL.trim() || 'http://localhost:3000'
+  try {
+    const url = new URL(raw)
+    if (typeof window !== 'undefined' && isLoopbackHost(url.hostname) && !isLoopbackHost(window.location.hostname)) {
+      url.hostname = window.location.hostname
+    }
+    return url.origin
+  } catch {
+    return raw.replace(/\/+$/, '')
+  }
+}
+
+function isLoopbackHost(host: string) {
+  return LOOPBACK_HOSTS.has(host.toLowerCase())
+}
 
 export type DisplayItem = {
   id: string
@@ -77,7 +95,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set('Content-Type', 'application/json')
   }
 
-  const res = await fetch(`${API_URL}${path}`, {
+  const apiURL = getAPIURL()
+  const res = await fetch(`${apiURL}${path}`, {
     ...init,
     headers,
   })
@@ -117,7 +136,7 @@ function toMediaProxyURL(mediaUrl: string) {
 
   try {
     const parsed = new URL(mediaUrl)
-    const apiURL = new URL(API_URL)
+    const apiURL = new URL(getAPIURL())
     if (parsed.origin === apiURL.origin && parsed.pathname === '/items/media') return mediaUrl
 
     const allowed =
@@ -139,7 +158,7 @@ function isInstagramMediaImageURL(url: URL) {
 }
 
 export function getWebSocketURL() {
-  const url = new URL(API_URL)
+  const url = new URL(getAPIURL())
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = '/ws'
   url.search = ''
